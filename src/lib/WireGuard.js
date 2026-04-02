@@ -31,6 +31,8 @@ const {
   JMAX,
   S1,
   S2,
+  S3,
+  S4,
   H1,
   H2,
   H3,
@@ -68,6 +70,8 @@ module.exports = class WireGuard {
             jmax: JMAX,
             s1: S1,
             s2: S2,
+            s3: S3,
+            s4: S4,
             h1: H1,
             h2: H2,
             h3: H3,
@@ -132,6 +136,8 @@ Jmin = ${config.server.jmin}
 Jmax = ${config.server.jmax}
 S1 = ${config.server.s1}
 S2 = ${config.server.s2}
+S3 = ${config.server.s3}
+S4 = ${config.server.s4}
 H1 = ${config.server.h1}
 H2 = ${config.server.h2}
 H3 = ${config.server.h3}
@@ -250,6 +256,8 @@ Jmin = ${config.server.jmin}
 Jmax = ${config.server.jmax}
 S1 = ${config.server.s1}
 S2 = ${config.server.s2}
+S3 = ${config.server.s3}
+S4 = ${config.server.s4}
 H1 = ${config.server.h1}
 H2 = ${config.server.h2}
 H3 = ${config.server.h3}
