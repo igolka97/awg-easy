@@ -5,13 +5,11 @@ on:
   push:
     branches:
       - master
-      - gh-actions-setup
 
 jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'YokiToki'
     permissions:
       packages: write
       contents: read
