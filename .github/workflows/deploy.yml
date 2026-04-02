@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - gh-actions-setup
 
 jobs:
   deploy:
@@ -40,4 +41,4 @@ jobs:
       with:
         push: true
         platforms: linux/amd64
-        tags: ghcr.io/yokitoki/awg-easy:latest, ghcr.io/yokitoki/awg-easy:${{ env.RELEASE }}
+        tags: ghcr.io/${{ github.repository }}:latest, ghcr.io/${{ github.repository }}:${{ env.RELEASE }}
