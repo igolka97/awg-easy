@@ -62,7 +62,7 @@ To automatically install & run wg-easy, simply run:
   --sysctl="net.ipv4.ip_forward=1" \
   --device=/dev/net/tun:/dev/net/tun \
   --restart unless-stopped \
-  ghcr.io/yokitoki/awg-easy
+  ghcr.io/igolka97/awg-easy
 ```
 
 > 💡 Replace `YOUR_SERVER_IP` with your WAN IP, or a Dynamic DNS hostname.
@@ -142,6 +142,7 @@ Use integrations with AmneziaWg from [amnezia-wg-easy](https://github.com/spcfox
 
 ---
 Then based on [amnezia-wg-easy](https://github.com/w0rng/amnezia-wg-easy) by Anton Abramov.
+Finally based on [amnezia-wg-easy](https://github.com/YokiToki/amnezia-wg-easy) by Stanislav Karakovskii.
 
 Changes by Stanislav Karakovskii:
 - Replaced the old amneziavpn/amnezia-wg image (last released 2 years ago) with amneziavpn/amneziawg-go and fixed the version
