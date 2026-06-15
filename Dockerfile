@@ -42,6 +42,9 @@ RUN apk add --no-cache iptables-legacy && \
     ln -sf /sbin/iptables-legacy-restore /sbin/iptables-restore && \
     ln -sf /sbin/iptables-legacy-save /sbin/iptables-save
 
+# Prepare default configuration directory
+RUN mkdir -p /etc/amnezia/amneziawg
+
 # Set Environment
 ENV DEBUG=Server,WireGuard
 
