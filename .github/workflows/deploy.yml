@@ -10,7 +10,7 @@ jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'YokiToki'
+    if: github.repository == 'igolka97/awg-easy'
     permissions:
       packages: write
       contents: read
@@ -40,4 +40,4 @@ jobs:
       with:
         push: true
         platforms: linux/amd64
-        tags: ghcr.io/yokitoki/awg-easy:latest, ghcr.io/yokitoki/awg-easy:${{ env.RELEASE }}
+        tags: ghcr.io/${{ github.repository }}:latest, ghcr.io/${{ github.repository }}:${{ env.RELEASE }}

@@ -2,7 +2,7 @@ services:
   awg-easy:
     env_file:
       - .env
-    image: ghcr.io/yokitoki/awg-easy:latest
+    image: ghcr.io/igolka97/awg-easy:latest
     container_name: awg-easy
     volumes:
       - ./amnezia-data:/etc/amnezia/amneziawg

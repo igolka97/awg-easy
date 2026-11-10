@@ -53,7 +53,7 @@ To automatically install & run wg-easy, simply run:
   -e PASSWORD_HASH=<🚨YOUR_ADMIN_PASSWORD_HASH> \
   -e PORT=51821 \
   -e WG_PORT=51820 \
-  -v ~/.amnezia-wg-easy:/etc/wireguard \
+  -v ~/.amnezia-wg-easy:/etc/amnezia/amneziawg \
   -p 51820:51820/udp \
   -p 51821:51821/tcp \
   --cap-add=NET_ADMIN \
@@ -62,7 +62,7 @@ To automatically install & run wg-easy, simply run:
   --sysctl="net.ipv4.ip_forward=1" \
   --device=/dev/net/tun:/dev/net/tun \
   --restart unless-stopped \
-  ghcr.io/yokitoki/awg-easy
+  ghcr.io/igolka97/awg-easy
 ```
 
 > 💡 Replace `YOUR_SERVER_IP` with your WAN IP, or a Dynamic DNS hostname.
@@ -75,6 +75,12 @@ The Web UI will now be available on `http://0.0.0.0:51821`.
 The Prometheus metrics will now be available on `http://0.0.0.0:51821/metrics`. Grafana dashboard [21733](https://grafana.com/grafana/dashboards/21733-wireguard/)
 
 > 💡 Your configuration files will be saved in `~/.amnezia-wg-easy`
+
+### Persistent configuration
+
+Mount `/etc/amnezia/amneziawg` as shown above. This directory contains the server and client keys in `wg0.json` and the generated `wg0.conf`. Back it up before replacing a container. Existing installations that mounted `/etc/wireguard` must copy their actual configuration out of the old container before changing the mount; mounting an empty directory does not migrate data.
+
+Existing JSON configurations must contain `server.s3` and `server.s4`. Missing fields, malformed JSON, and read errors stop startup instead of regenerating keys. There is no automatic migration. Environment variables `S3` and `S4` apply when creating a new server configuration; existing stored values are preserved.
 
 ## Options
 
@@ -114,6 +120,8 @@ These options can be configured by setting environment variables using `-e KEY="
 | `JMAX`                        | `1000`            | `250`                          | Junk packet maximum size — maximum size for Junk packets.                                                                                                                                                                |
 | `S1`                          | `random`          | `75`                           | Init packet junk size — the size of random data that will be added to the init packet, the size of which is initially fixed.                                                                                             |
 | `S2`                          | `random`          | `75`                           | Response packet junk size — the size of random data that will be added to the response packet, the size of which is initially fixed.                                                                                     |
+| `S3` | `random (1–63)` | `16` | Cookie reply packet padding. Generated once and stored in the server configuration. |
+| `S4` | `0` | `0` | Transport data packet padding. Affects bandwidth overhead; keep at zero unless needed. |
 | `H1`                          | `random`          | `1234567891`                   | Init packet magic header — the header of the first byte of the handshake. Must be < uint_max.                                                                                                                            |
 | `H2`                          | `random`          | `1234567892`                   | Response packet magic header — header of the first byte of the handshake response. Must be < uint_max.                                                                                                                   |
 | `H3`                          | `random`          | `1234567893`                   | Underload packet magic header — UnderLoad packet header. Must be < uint_max.                                                                                                                                             |
@@ -128,7 +136,7 @@ To update to the latest version, simply run:
 ```bash
 docker stop amnezia-wg-easy
 docker rm amnezia-wg-easy
-docker pull ghcr.io/yokitoki/awg-easy
+docker pull ghcr.io/igolka97/awg-easy
 ```
 
 And then run the `docker run -d \ ...` command above again.
