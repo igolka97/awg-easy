@@ -31,6 +31,8 @@ RUN chmod +x /bin/wgpw
 # Install Linux packages
 RUN apk add --no-cache \
     dpkg \
+    curl \
+    iproute2 \
     dumb-init \
     iptables \
     nodejs \

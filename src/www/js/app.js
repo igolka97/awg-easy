@@ -72,6 +72,18 @@ new Vue({
     remember: false,
     rememberMeEnabled: false,
 
+    outbound: null,
+    outboundBusy: false,
+    outboundSetup: false,
+    outboundAction: '',
+    outboundDeleting: false,
+    outboundNotice: '',
+    outboundForm: false,
+    outboundName: '',
+    outboundConfig: '',
+    outboundError: '',
+    outboundProbe: null,
+    outboundRefreshedAt: 0,
     clients: null,
     clientsPersist: {},
     clientDelete: null,
@@ -93,8 +105,8 @@ new Vue({
 
     uiChartType: 0,
     avatarSettings: {
-      'dicebear': null,
-      'gravatar': false,
+      dicebear: null,
+      gravatar: false,
     },
     enableOneTimeLinks: false,
     enableSortClient: false,
@@ -188,6 +200,90 @@ new Vue({
 
   },
   methods: {
+    async toggleOutbound() {
+      if (this.outbound.mode === 'vpn' || this.outboundSetup) {
+        if (this.outbound.mode === 'vpn') await this.changeOutbound('mode', 'direct');
+        if (this.outbound.mode !== 'direct') return;
+        this.outboundSetup = false;
+        this.outboundForm = false;
+        this.outboundDeleting = false;
+        this.outboundConfig = '';
+        this.outboundName = '';
+      } else {
+        this.outboundError = '';
+        this.outboundNotice = '';
+        if (this.outbound.profile) {
+          this.outboundSetup = true;
+          await this.changeOutbound('mode', 'vpn');
+          if (this.outbound.mode === 'vpn') this.outboundSetup = false;
+        } else {
+          this.outboundSetup = true;
+          this.outboundForm = true;
+        }
+      }
+    },
+    editOutbound() {
+      this.outboundSetup = true;
+      this.outboundForm = true;
+      this.outboundError = '';
+      this.outboundNotice = '';
+    },
+    async readOutboundFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (file.size > 16384) {
+        this.outboundError = this.$t('exitFileTooLarge');
+        event.target.value = '';
+        return;
+      }
+      try {
+        this.outboundConfig = await file.text();
+        if (!this.outboundName) this.outboundName = file.name.replace(/\.conf$/i, '');
+        this.outboundError = '';
+      } catch (err) {
+        this.outboundError = this.$t('exitReadError');
+      }
+      event.target.value = '';
+    },
+    async changeOutbound(action, mode) {
+      this.outboundBusy = true;
+      this.outboundAction = action;
+      this.outboundNotice = '';
+      this.outboundError = '';
+      this.outboundProbe = null;
+      try {
+        const result = await this.api.call({
+          method: 'post',
+          path: '/outbound',
+          body: {
+            action,
+            ...(action === 'mode' ? { mode } : {}),
+            ...(action === 'import' ? { name: this.outboundName, config: this.outboundConfig } : {}),
+          },
+        });
+        this.outbound = result;
+        if (action === 'check') this.outboundProbe = result;
+        if (action === 'import') {
+          this.outboundConfig = '';
+          this.outboundName = '';
+          this.outboundForm = false;
+          this.outboundAction = 'mode';
+          this.outbound = await this.api.call({ method: 'post', path: '/outbound', body: { action: 'mode', mode: 'vpn' } });
+          this.outboundSetup = false;
+          this.outboundNotice = 'exitSaved';
+        }
+        if (action === 'delete') {
+          this.outboundDeleting = false;
+          this.outboundNotice = 'exitDeleted';
+          this.outboundSetup = false;
+        }
+      } catch (err) {
+        this.outboundError = err.message;
+        this.outbound = await this.api.call({ method: 'get', path: '/outbound' }).catch(() => this.outbound);
+      } finally {
+        this.outboundBusy = false;
+      }
+    },
     dateTime: (value) => {
       return new Intl.DateTimeFormat(undefined, {
         year: 'numeric',
@@ -202,12 +298,22 @@ new Vue({
     } = {}) {
       if (!this.authenticated) return;
 
+      if (!this.outboundBusy && Date.now() - this.outboundRefreshedAt > 5000) {
+        this.outboundRefreshedAt = Date.now();
+        this.api.call({ method: 'get', path: '/outbound' })
+          .then((status) => {
+            if (!this.outboundBusy) this.outbound = status;
+          })
+          .catch((err) => {
+            this.outboundError = err.message;
+          });
+      }
       const clients = await this.api.getClients();
       this.clients = clients.map((client) => {
         if (client.name.includes('@') && client.name.includes('.') && this.avatarSettings.gravatar) {
           client.avatar = `https://gravatar.com/avatar/${sha256(client.name.toLowerCase().trim())}.jpg`;
         } else if (this.avatarSettings.dicebear) {
-          client.avatar = `https://api.dicebear.com/9.x/${this.avatarSettings.dicebear}/svg?seed=${sha256(client.name.toLowerCase().trim())}`
+          client.avatar = `https://api.dicebear.com/9.x/${this.avatarSettings.dicebear}/svg?seed=${sha256(client.name.toLowerCase().trim())}`;
         }
 
         if (!this.clientsPersist[client.id]) {
@@ -373,9 +479,16 @@ new Vue({
       this.setTheme(this.uiTheme);
     },
     setTheme(theme) {
+      const style = document.createElement('style');
+      style.textContent = '*,*::before,*::after{transition:none !important}';
+      document.head.append(style);
       const { classList } = document.documentElement;
       const shouldAddDarkClass = theme === 'dark' || (theme === 'auto' && this.prefersDarkScheme.matches);
       classList.toggle('dark', shouldAddDarkClass);
+      // Force a style flush while theme transitions are suppressed.
+      // eslint-disable-next-line no-void
+      void document.body.offsetHeight;
+      requestAnimationFrame(() => requestAnimationFrame(() => style.remove()));
     },
     handlePrefersChange(e) {
       if (localStorage.theme === 'auto') {
@@ -476,10 +589,10 @@ new Vue({
         this.avatarSettings = res;
       })
       .catch(() => {
-          this.avatarSettings = {
-            'dicebear': null,
-            'gravatar': false,
-          };
+        this.avatarSettings = {
+          dicebear: null,
+          gravatar: false,
+        };
       });
 
     Promise.resolve().then(async () => {

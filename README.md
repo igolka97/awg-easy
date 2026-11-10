@@ -43,17 +43,17 @@ And log in again.
 
 ### 2. Run AmneziaWG Easy
 
-To automatically install & run wg-easy, simply run:
+For a new installation, replace the host and password hash below, then run:
 
 ```
   docker run -d \
   --name=amnezia-wg-easy \
   -e LANG=en \
-  -e WG_HOST=<🚨YOUR_SERVER_IP> \
-  -e PASSWORD_HASH=<🚨YOUR_ADMIN_PASSWORD_HASH> \
+  -e WG_HOST='YOUR_SERVER_IP' \
+  -e PASSWORD_HASH='YOUR_ADMIN_PASSWORD_HASH' \
   -e PORT=51821 \
   -e WG_PORT=51820 \
-  -v ~/.amnezia-wg-easy:/etc/amnezia/amneziawg \
+  -v "$HOME/.amnezia-wg-easy:/etc/amnezia/amneziawg" \
   -p 51820:51820/udp \
   -p 51821:51821/tcp \
   --cap-add=NET_ADMIN \
@@ -62,7 +62,7 @@ To automatically install & run wg-easy, simply run:
   --sysctl="net.ipv4.ip_forward=1" \
   --device=/dev/net/tun:/dev/net/tun \
   --restart unless-stopped \
-  ghcr.io/igolka97/awg-easy
+  ghcr.io/igolka97/awg-easy:latest
 ```
 
 > 💡 Replace `YOUR_SERVER_IP` with your WAN IP, or a Dynamic DNS hostname.
@@ -70,7 +70,7 @@ To automatically install & run wg-easy, simply run:
 > 💡 Replace `YOUR_ADMIN_PASSWORD_HASH` with a bcrypt password hash to log in on the Web UI.
 > See [How_to_generate_an_bcrypt_hash.md](./How_to_generate_an_bcrypt_hash.md) for know how generate the hash.
 
-The Web UI will now be available on `http://0.0.0.0:51821`.
+The Web UI will be available on `http://YOUR_SERVER_IP:51821`. Keep the bcrypt hash in single quotes so the shell preserves its `$` characters.
 
 The Prometheus metrics will now be available on `http://0.0.0.0:51821/metrics`. Grafana dashboard [21733](https://grafana.com/grafana/dashboards/21733-wireguard/)
 
@@ -78,7 +78,7 @@ The Prometheus metrics will now be available on `http://0.0.0.0:51821/metrics`. 
 
 ### Persistent configuration
 
-Mount `/etc/amnezia/amneziawg` as shown above. This directory contains the server and client keys in `wg0.json` and the generated `wg0.conf`. Back it up before replacing a container. Existing installations that mounted `/etc/wireguard` must copy their actual configuration out of the old container before changing the mount; mounting an empty directory does not migrate data.
+Mount `/etc/amnezia/amneziawg` as shown above. This directory contains the server and client keys in `wg0.json`, the generated `wg0.conf`, and the VPN exit configuration in `outbound.json` and `awgout.conf` when configured. Back it up before replacing a container. Existing installations that mounted `/etc/wireguard` must copy their actual configuration out of the old container before changing the mount; mounting an empty directory does not migrate data.
 
 Existing JSON configurations must contain `server.s3` and `server.s4`. Missing fields, malformed JSON, and read errors stop startup instead of regenerating keys. There is no automatic migration. Environment variables `S3` and `S4` apply when creating a new server configuration; existing stored values are preserved.
 
@@ -156,3 +156,75 @@ Changes by Stanislav Karakovskii:
 - Raised NodeJs build version
 - Fixes to docker-compose.yml
 - Release number now matches amneziawg-go version
+
+### Internet exit through another AWG server
+
+Create a regular client on the exit server and download its `.conf`. On the entry
+server, turn on **Exit through another VPN**, upload or paste that configuration,
+and select **Save and connect**. This saves the configuration and activates the
+exit for all clients. Use **Check connection** to verify internet access. Turning
+the switch off restores direct access and keeps the saved configuration. Turning
+it back on reconnects using that configuration. To replace or delete it, turn
+the switch off, then select **Replace configuration**.
+
+The `docker run` command above already grants the networking permissions needed
+for an exit: `NET_ADMIN`, `/dev/net/tun`, IPv4 forwarding and `src_valid_mark`.
+No extra published port, host networking or privileged mode is needed for the
+outgoing tunnel. Keep the whole `WG_PATH` directory mounted so both VPNs survive
+container replacement.
+
+For a **new entry server**, add this option to the command above:
+
+```bash
+-e WG_DEFAULT_ADDRESS='10.9.0.x'
+```
+
+Use `WG_HOST` for the entry server's public IP, not the exit server's IP. The
+remote endpoint comes from the imported client configuration. Keep the exit
+server on a different client subnet, for example `10.8.0.x`. On an existing
+installation, changing this environment variable alone does not migrate stored
+server/client addresses; preserve the existing data and plan a subnet change
+separately.
+
+The exit feature must be included in the image being launched. Local source
+changes are not included in an already published `latest` tag. To build the
+current checkout on a Linux Docker host:
+
+```bash
+docker build --platform linux/amd64 -t awg-easy:outbound .
+```
+
+Then use `awg-easy:outbound` instead of `ghcr.io/igolka97/awg-easy:latest` as the
+last argument of `docker run`. Alternatively, use the registry image after the
+updated source has been published by CI. The base image is amd64-only; a build
+on an ARM machine does not establish that its emulated VPN runtime works.
+
+Use different client subnets on the two servers (for example `10.9.0.x` on the
+entry server and `10.8.0.x` on the exit server). Import supports one IPv4 address,
+one peer and full-tunnel AllowedIPs. Shell hooks and unsupported directives are
+rejected. Imported DNS is validated but does not replace the server resolver or
+client DNS settings. Clients retain the DNS settings in their own configurations.
+
+The entry server uses a separate `awgout` interface, NAT and policy routing for
+packets entering `wg0`. The container's own default route is unchanged. Table
+`51830`, rule priorities `10000`/`10001`, interface `awgout` and firewall comment
+`awg-easy-outbound` are reserved for this feature. Custom network rules must not
+use these identifiers or override the exit's firewall rules.
+
+VPN mode fails closed: forwarded client traffic cannot leave via another
+interface if the tunnel goes down. IPv6 forwarding from clients is blocked in
+VPN mode; this version only provides an IPv4 VPN exit. This protection operates
+on the server and does not replace a client-side kill switch. The exit sees all
+entry-server clients as one peer. Per-client statistics remain on the entry.
+
+The connection check performs an HTTPS request to Cloudflare's
+`https://1.1.1.1/cdn-cgi/trace`, bound to the exit interface, and displays the
+observed exit IP. A recent handshake and a successful internet probe are shown
+separately. Checking a saved exit does not select it for clients.
+
+Exit settings, including private keys, are stored in `outbound.json` and
+`awgout.conf` under `WG_PATH` with owner-only permissions. Persist and back up the
+whole configuration directory; the existing client JSON export does not include
+the exit. The selected VPN exit is restored on startup before HTTP is served.
+A failed tunnel restore leaves client traffic blocked and reports an error in
+the panel so the operator can retry or explicitly select direct access.

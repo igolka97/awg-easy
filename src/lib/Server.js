@@ -24,6 +24,7 @@ const {
 } = require('h3');
 
 const WireGuard = require('../services/WireGuard');
+const Outbound = require('../services/Outbound');
 
 const {
   PORT,
@@ -131,7 +132,7 @@ module.exports = class Server {
         return {
           dicebear: DICEBEAR_TYPE,
           gravatar: USE_GRAVATAR,
-        }
+        };
       }))
 
       // Authentication
@@ -223,6 +224,17 @@ module.exports = class Server {
     app.use(router2);
 
     router2
+      .get('/api/outbound', defineEventHandler((event) => {
+        setHeader(event, 'Cache-Control', 'no-store');
+        return Outbound.status();
+      }))
+      .post('/api/outbound', defineEventHandler(async (event) => {
+        setHeader(event, 'Cache-Control', 'no-store');
+        const body = await readBody(event);
+        if (!body || typeof body !== 'object') throw createError({ statusCode: 400, message: 'Expected an object.' });
+        const config = await WireGuard.getConfig();
+        return Outbound.change(body.action, body, config.server.address);
+      }))
       .delete('/api/session', defineEventHandler((event) => {
         const sessionId = event.node.req.session.id;
 

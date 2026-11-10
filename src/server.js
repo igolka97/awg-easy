@@ -1,10 +1,15 @@
 'use strict';
 
-require('./services/Server');
-
 const WireGuard = require('./services/WireGuard');
 
-WireGuard.getConfig()
+const Outbound = require('./services/Outbound');
+
+Outbound.prepare()
+  .then(() => WireGuard.getConfig())
+  .then(() => Outbound.restore())
+  // Start HTTP only after restoring the selected exit and its firewall.
+  // eslint-disable-next-line global-require
+  .then(() => require('./services/Server'))
   .catch((err) => {
   // eslint-disable-next-line no-console
     console.error(err);

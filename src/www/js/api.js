@@ -23,7 +23,7 @@ class API {
     const json = await res.json();
 
     if (!res.ok) {
-      throw new Error(json.error || res.statusText);
+      throw new Error(json.error || json.message || res.statusText);
     }
 
     return json;

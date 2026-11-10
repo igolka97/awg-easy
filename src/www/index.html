@@ -443,6 +443,78 @@
           </div>
         </div>
 
+        <section v-if="outbound" class="exit-panel mt-5" aria-labelledby="exit-heading" :aria-busy="outboundBusy">
+          <header class="exit-header exit-compact-header">
+            <div>
+              <h2 id="exit-heading" class="font-semibold">{{$t('exitSwitchTitle')}}</h2>
+              <p class="exit-muted text-sm mt-1">{{outbound.mode === 'vpn' ? $t('exitActiveVia', { name: outbound.profile.name }) : outboundSetup ? $t('exitSetupHint') : $t('exitOffHint')}}</p>
+              <button v-if="outbound.profile && outbound.mode === 'direct' && !outboundSetup" :disabled="outboundBusy" @click="editOutbound" class="exit-edit-link">{{$t('exitReplace')}}</button>
+            </div>
+            <button type="button" role="switch" :aria-checked="outbound.mode === 'vpn' || outboundSetup" aria-labelledby="exit-heading" aria-controls="exit-settings" :disabled="outboundBusy" @click="toggleOutbound" class="exit-switch" :class="{ 'is-on': outbound.mode === 'vpn' || outboundSetup }"><span aria-hidden="true"></span></button>
+          </header>
+          <div v-if="outbound.mode === 'vpn' || outboundSetup" id="exit-settings" class="exit-body exit-expanded-body">
+            <div v-if="outbound.profile && !outboundForm" class="mb-3">
+              <p class="font-semibold">{{outbound.profile.name}}</p>
+              <p class="exit-endpoint text-xs mt-1">{{outbound.profile.endpoint}}</p>
+            </div>
+            <p v-if="outbound.mode === 'vpn'" class="exit-note">{{$t('exitFailClosed')}}</p>
+            <p v-if="!outbound.profile && !outboundForm" class="exit-muted text-sm mt-4">{{$t('exitEmpty')}}</p>
+
+            <div v-if="outbound.profile && !outboundForm && !outboundDeleting" class="exit-status-row">
+              <span class="exit-status" :class="{ 'is-connected': outbound.connected }"><span class="exit-dot" aria-hidden="true"></span>{{outbound.connected ? $t('exitHandshakeRecent') : $t('exitHandshakeNone')}}</span>
+              <button :disabled="outboundBusy" @click="changeOutbound('check')" class="exit-button">{{outboundBusy && outboundAction === 'check' ? $t('exitChecking') : $t('exitCheck')}}</button>
+            </div>
+            <p v-if="outbound.profile && !outboundForm && !outboundDeleting" class="exit-muted text-xs mt-2">{{$t('exitHandshakeHint')}}</p>
+            <p v-if="outboundProbe" role="status" class="exit-feedback" :class="{ 'is-warning': !outboundProbe.internet }">{{outboundProbe.internet ? $t('exitInternetOk', { ip: outboundProbe.exitIp }) : $t('exitInternetFailed')}}</p>
+            <p v-if="outboundNotice && !outboundForm && !outboundDeleting" role="status" class="exit-feedback">{{$t(outboundNotice)}}</p>
+
+            <div v-if="outbound.mode === 'direct' && !outboundForm && !outboundDeleting" class="exit-actions mt-4">
+              <button :disabled="outboundBusy" @click="editOutbound" class="exit-button" :class="{ 'exit-button-primary': !outbound.profile }">{{outbound.profile ? $t('exitReplace') : $t('exitImport')}}</button>
+              <button v-if="outbound.profile" :disabled="outboundBusy" @click="outboundDeleting = true; outboundError = ''; outboundNotice = ''" class="exit-button exit-button-quiet">{{$t('exitDelete')}}</button>
+            </div>
+
+            <form v-if="outboundForm" @submit.prevent="changeOutbound('import')" class="exit-form">
+              <h3 class="font-semibold">{{outbound.profile ? $t('exitReplace') : $t('exitImport')}}</h3>
+              <p class="exit-muted text-sm mt-2 mb-4">{{$t('exitImportSteps')}}</p>
+              <label for="exit-name" class="exit-label">{{$t('exitName')}}</label>
+              <input id="exit-name" v-model="outboundName" required maxlength="80" :placeholder="$t('exitNameExample')" :disabled="outboundBusy" class="exit-input">
+              <label for="exit-file" class="exit-label mt-4">{{$t('exitFile')}}</label>
+              <input id="exit-file" type="file" accept=".conf,text/plain" @change="readOutboundFile" :disabled="outboundBusy" class="exit-file" aria-describedby="exit-file-hint">
+              <p id="exit-file-hint" class="exit-muted text-xs mt-2">{{$t('exitFileHint')}}</p>
+              <label for="exit-config" class="exit-label mt-4">{{$t('exitPaste')}}</label>
+              <textarea id="exit-config" v-model="outboundConfig" required rows="6" maxlength="16384" spellcheck="false" autocomplete="off" :disabled="outboundBusy" :aria-invalid="!!outboundError" :aria-describedby="outboundError ? 'exit-import-error' : 'exit-save-hint'" class="exit-input exit-code"></textarea>
+              <div v-if="outboundError" id="exit-import-error" role="alert" class="exit-feedback is-warning"><p>{{$t('exitImportError')}}</p><p class="text-xs mt-2">{{outboundError}}</p></div>
+              <details class="exit-details">
+                <summary>{{$t('exitRequirements')}}</summary>
+                <p>{{$t('exitImportHint')}}</p>
+              </details>
+              <p id="exit-save-hint" class="exit-muted text-sm mb-4">{{$t('exitSaveHint')}}</p>
+              <p v-if="outbound.profile" class="text-sm mb-4">{{$t('exitReplaceHint', { name: outbound.profile.name })}}</p>
+              <div class="exit-actions">
+                <button type="submit" :disabled="outboundBusy" class="exit-button exit-button-primary">{{outboundBusy ? $t('exitSaving') : outbound.profile ? $t('exitReplace') : $t('exitSave')}}</button>
+                <button type="button" :disabled="outboundBusy" @click="outboundForm = false; outboundSetup = false; outboundConfig = ''; outboundName = ''; outboundError = ''" class="exit-button">{{$t('exitCancel')}}</button>
+                <button v-if="outbound.profile" type="button" :disabled="outboundBusy" @click="outboundForm = false; outboundDeleting = true; outboundError = ''" class="exit-button exit-button-quiet">{{$t('exitDelete')}}</button>
+              </div>
+            </form>
+
+            <div v-if="outboundDeleting && outbound.profile" class="exit-confirm" role="group" aria-labelledby="exit-delete-title">
+              <h3 id="exit-delete-title" class="font-semibold">{{$t('exitDeleteTitle', { name: outbound.profile.name })}}</h3>
+              <p class="exit-muted text-sm mt-2 mb-4">{{$t('exitDeleteHint')}}</p>
+              <div class="exit-actions">
+                <button :disabled="outboundBusy" @click="changeOutbound('delete')" class="exit-button exit-button-primary">{{outboundBusy ? $t('exitDeleting') : $t('exitDelete')}}</button>
+                <button :disabled="outboundBusy" @click="outboundDeleting = false; outboundError = ''" class="exit-button">{{$t('exitCancel')}}</button>
+              </div>
+            </div>
+            <p v-if="outboundBusy && outboundAction === 'mode'" role="status" class="exit-note">{{$t('exitSwitching')}}</p>
+            <div v-if="!outboundForm && (outboundError || outbound.error)" role="alert" class="exit-feedback is-warning">
+              <p>{{$t(outbound.error ? 'exitRuntimeError' : 'exitActionError')}}</p>
+              <button v-if="outbound.profile" :disabled="outboundBusy" @click="changeOutbound('mode', 'vpn')" class="exit-button mt-3">{{$t('exitRetry')}}</button>
+              <details class="exit-details"><summary>{{$t('exitErrorDetails')}}</summary><p>{{outboundError || outbound.error}}</p></details>
+            </div>
+          </div>
+          <div v-if="!(outbound.mode === 'vpn' || outboundSetup) && outboundError" role="alert" class="exit-body"><p class="text-sm">{{$t('exitActionError')}}</p><p class="exit-muted text-xs mt-2">{{outboundError}}</p></div>
+        </section>
+
         <!-- QR Code-->
         <div v-if="qrcode">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20">
