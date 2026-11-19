@@ -84,6 +84,9 @@ new Vue({
     outboundError: '',
     outboundProbe: null,
     outboundRefreshedAt: 0,
+    outboundRoutingEditing: false,
+    outboundRoutingDefault: 'vpn',
+    outboundRoutingNetworks: '',
     clients: null,
     clientsPersist: {},
     clientDelete: null,
@@ -252,17 +255,23 @@ new Vue({
       this.outboundError = '';
       this.outboundProbe = null;
       try {
+        if (action === 'routing' && new TextEncoder().encode(this.outboundRoutingNetworks).length > 1024 * 1024) throw new Error(this.$t('exitRoutingTooLarge'));
         const result = await this.api.call({
           method: 'post',
           path: '/outbound',
           body: {
             action,
             ...(action === 'mode' ? { mode } : {}),
+            ...(action === 'routing' ? { routing: { defaultExit: this.outboundRoutingDefault, networks: this.outboundRoutingNetworks.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) } } : {}),
             ...(action === 'import' ? { name: this.outboundName, config: this.outboundConfig } : {}),
           },
         });
         this.outbound = result;
         if (action === 'check') this.outboundProbe = result;
+        if (action === 'routing') {
+          this.outboundRoutingEditing = false;
+          this.outboundNotice = 'exitRoutingSaved';
+        }
         if (action === 'import') {
           this.outboundConfig = '';
           this.outboundName = '';

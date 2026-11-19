@@ -33,6 +33,7 @@ RUN apk add --no-cache \
     dpkg \
     curl \
     iproute2 \
+    ipset \
     dumb-init \
     iptables \
     nodejs \

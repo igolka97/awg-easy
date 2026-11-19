@@ -207,12 +207,15 @@ client DNS settings. Clients retain the DNS settings in their own configurations
 
 The entry server uses a separate `awgout` interface, NAT and policy routing for
 packets entering `wg0`. The container's own default route is unchanged. Table
-`51830`, rule priorities `10000`/`10001`, interface `awgout` and firewall comment
+`51830`, rule priorities `10000`/`10001`, firewall chains `AWG-EXIT`/`AWG-CLASSIFY`,
+mark bit `0x1000000`, ipsets `awg-exit-networks`/`awg-exit-staging`, interface `awgout`
+and firewall comment
 `awg-easy-outbound` are reserved for this feature. Custom network rules must not
 use these identifiers or override the exit's firewall rules.
 
-VPN mode fails closed: forwarded client traffic cannot leave via another
-interface if the tunnel goes down. IPv6 forwarding from clients is blocked in
+VPN destinations fail closed: traffic assigned to the second VPN cannot leave
+via another interface if the tunnel goes down. Explicit direct destinations
+continue to use the entry server. IPv6 forwarding from clients is blocked in
 VPN mode; this version only provides an IPv4 VPN exit. This protection operates
 on the server and does not replace a client-side kill switch. The exit sees all
 entry-server clients as one peer. Per-client statistics remain on the entry.
@@ -226,5 +229,83 @@ Exit settings, including private keys, are stored in `outbound.json` and
 `awgout.conf` under `WG_PATH` with owner-only permissions. Persist and back up the
 whole configuration directory; the existing client JSON export does not include
 the exit. The selected VPN exit is restored on startup before HTTP is served.
-A failed tunnel restore leaves client traffic blocked and reports an error in
+A failed tunnel restore leaves VPN destinations blocked and reports an error in
 the panel so the operator can retry or explicitly select direct access.
+
+### Route destinations by IPv4 address
+
+The **IP routing** section offers two modes for all clients connected to `wg0`:
+
+| Default exit | Destinations in the list | Other IPv4 destinations |
+| --- | --- | --- |
+| Second VPN | Directly through this server | Through the second VPN |
+| This server | Through the second VPN | Directly through this server |
+
+Enter one IPv4 address or CIDR subnet per line. There is no 64-entry limit;
+the input and normalized list are each limited to 1 MiB of text, with a 2 MiB
+limit on the JSON request (including chunked requests). Oversized lists are
+rejected entirely, never truncated. Host addresses
+are normalized to `/32`, CIDRs to their network address, and duplicates removed.
+All listed destinations use the same exception exit, so overlapping subnets have
+no conflicting actions. An empty list sends everything to the default exit;
+`0.0.0.0/0` sends everything to the exception exit. Domains are not accepted.
+A site's addresses can change, and shared CDN addresses affect multiple sites.
+DNS requests follow the same destination-IP rules; the feature does not resolve
+domains or route by hostname. Addresses local to the entry server remain local.
+
+The main switch enables or disables the whole VPN routing policy. When disabled,
+all clients use direct access and the rules remain saved. IPv6 forwarding is
+blocked while the switch is enabled, in either routing mode. Direct destinations
+remain available when the second tunnel is removed or its peer stops responding.
+Rules only match forwarded traffic entering `wg0`; the host and other containers
+retain their routes. Custom rules must not use the reserved priorities or chain.
+
+Saving validates the entire list, then loads an inactive `hash:net` ipset using
+a single bulk `ipset restore`. The active set is replaced with `ipset swap`; a
+failed load leaves the active list and persisted configuration unchanged. Updating
+only the list does not rebuild rules or block forwarding. Changing the default
+exit, or enabling/disabling routing, briefly guards forwarding while replacing
+a fixed number of rules. An error installing those rules leaves the transition
+guard in place; retry the operation to recover. The classifier marks each packet
+once; both policy routing and the forwarding guard use that mark, so a set swap
+between classification and forwarding cannot send that packet via the wrong exit. Existing connections
+to destinations whose exit changed may need to reconnect because their NAT mapping
+has changed. A failed tunnel startup still installs direct routes and keeps VPN
+routes unreachable. No automatic fallback to the direct exit is performed.
+
+### Explicit upgrade of existing exit configurations
+
+There is **no automatic migration** of an existing `outbound.json`. It now requires:
+
+```json
+"routing": { "defaultExit": "vpn", "networks": [] }
+```
+
+Fresh installations create these settings themselves. If `outbound.json` does not
+exist, no migration is needed. For an existing file, stop the old container first,
+then run the following using the new image and the **actual existing data directory**:
+
+```bash
+docker stop amnezia-wg-easy
+docker run --rm --network none --entrypoint node \
+  -v /opt/awg-easy/data:/data \
+  ghcr.io/igolka97/awg-easy:NEW_TAG \
+  /app/scripts/migrate-outbound-routing.js /data
+```
+
+Replace `NEW_TAG` with the new image tag or digest before running. Then recreate
+the service with that image and the same volume and environment. The migration
+preserves the selected mode, profile and keys, and adds an empty exception list
+with the second VPN as default. It creates `outbound.json.before-ip-routing` with
+owner-only permissions before replacing the file. It refuses to overwrite an
+existing backup, repeat an already completed migration, or migrate malformed JSON.
+The running application refuses old or invalid routing settings instead of silently
+choosing another exit. Do not run migration against a live service.
+
+The image includes `ipset`; the host kernel must support `ip_set`, `hash:net`,
+iptables set matching and packet marks. Unsupported kernels report an error;
+there is no fallback to per-destination rules. The set capacity of 262144 entries
+exceeds the number of IPv4/CIDR entries that can fit within the text-size limit.
+`0.0.0.0/0` is loaded as two `/1` subnets because `hash:net` cannot store `/0`.
+No force-add/eviction is enabled. Set contents are rebuilt from `outbound.json`
+on restart; the temporary restore file is removed after loading.

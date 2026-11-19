@@ -447,7 +447,7 @@
           <header class="exit-header exit-compact-header">
             <div>
               <h2 id="exit-heading" class="font-semibold">{{$t('exitSwitchTitle')}}</h2>
-              <p class="exit-muted text-sm mt-1">{{outbound.mode === 'vpn' ? $t('exitActiveVia', { name: outbound.profile.name }) : outboundSetup ? $t('exitSetupHint') : $t('exitOffHint')}}</p>
+              <p class="exit-muted text-sm mt-1">{{outbound.mode === 'vpn' ? $t(outbound.routing.defaultExit === 'vpn' ? 'exitActiveVia' : 'exitActiveSelected', { name: outbound.profile.name }) : outboundSetup ? $t('exitSetupHint') : $t('exitOffHint')}}</p>
               <button v-if="outbound.profile && outbound.mode === 'direct' && !outboundSetup" :disabled="outboundBusy" @click="editOutbound" class="exit-edit-link">{{$t('exitReplace')}}</button>
             </div>
             <button type="button" role="switch" :aria-checked="outbound.mode === 'vpn' || outboundSetup" aria-labelledby="exit-heading" aria-controls="exit-settings" :disabled="outboundBusy" @click="toggleOutbound" class="exit-switch" :class="{ 'is-on': outbound.mode === 'vpn' || outboundSetup }"><span aria-hidden="true"></span></button>
@@ -466,7 +466,7 @@
             </div>
             <p v-if="outbound.profile && !outboundForm && !outboundDeleting" class="exit-muted text-xs mt-2">{{$t('exitHandshakeHint')}}</p>
             <p v-if="outboundProbe" role="status" class="exit-feedback" :class="{ 'is-warning': !outboundProbe.internet }">{{outboundProbe.internet ? $t('exitInternetOk', { ip: outboundProbe.exitIp }) : $t('exitInternetFailed')}}</p>
-            <p v-if="outboundNotice && !outboundForm && !outboundDeleting" role="status" class="exit-feedback">{{$t(outboundNotice)}}</p>
+            <p v-if="outboundNotice && outboundNotice !== 'exitRoutingSaved' && !outboundForm && !outboundDeleting" role="status" class="exit-feedback">{{$t(outboundNotice)}}</p>
 
             <div v-if="outbound.mode === 'direct' && !outboundForm && !outboundDeleting" class="exit-actions mt-4">
               <button :disabled="outboundBusy" @click="editOutbound" class="exit-button" :class="{ 'exit-button-primary': !outbound.profile }">{{outbound.profile ? $t('exitReplace') : $t('exitImport')}}</button>
@@ -506,11 +506,36 @@
               </div>
             </div>
             <p v-if="outboundBusy && outboundAction === 'mode'" role="status" class="exit-note">{{$t('exitSwitching')}}</p>
-            <div v-if="!outboundForm && (outboundError || outbound.error)" role="alert" class="exit-feedback is-warning">
+            <div v-if="!outboundForm && !outboundRoutingEditing && (outboundError || outbound.error)" role="alert" class="exit-feedback is-warning">
               <p>{{$t(outbound.error ? 'exitRuntimeError' : 'exitActionError')}}</p>
               <button v-if="outbound.profile" :disabled="outboundBusy" @click="changeOutbound('mode', 'vpn')" class="exit-button mt-3">{{$t('exitRetry')}}</button>
               <details class="exit-details"><summary>{{$t('exitErrorDetails')}}</summary><p>{{outboundError || outbound.error}}</p></details>
             </div>
+          </div>
+          <div v-if="outbound.profile && !outboundForm && !outboundDeleting" class="exit-body exit-expanded-body">
+            <h3 class="font-semibold">{{$t('exitRoutingTitle')}}</h3>
+            <p class="exit-muted text-sm mt-2">{{$t(outbound.routing.defaultExit === 'vpn' ? 'exitRoutingSummaryVpn' : 'exitRoutingSummaryDirect', { count: outbound.routing.networks.length })}}</p>
+            <p v-if="outbound.mode === 'direct'" class="exit-muted text-sm mt-2">{{$t('exitRoutingInactive')}}</p>
+            <button v-if="!outboundRoutingEditing" :disabled="outboundBusy" @click="outboundRoutingDefault = outbound.routing.defaultExit; outboundRoutingNetworks = outbound.routing.networks.join('\n'); outboundRoutingEditing = true; outboundNotice = ''; outboundError = ''" class="exit-button mt-3">{{$t('exitRoutingEdit')}}</button>
+            <form v-else @submit.prevent="changeOutbound('routing')" class="mt-4">
+              <fieldset :disabled="outboundBusy">
+                <label for="exit-routing-default" class="exit-label">{{$t('exitRoutingDefault')}}</label>
+                <select id="exit-routing-default" v-model="outboundRoutingDefault" class="exit-input">
+                  <option value="vpn">{{$t('exitRoutingDefaultVpn')}}</option>
+                  <option value="direct">{{$t('exitRoutingDefaultDirect')}}</option>
+                </select>
+                <label for="exit-routing-networks" class="exit-label mt-4">{{$t(outboundRoutingDefault === 'vpn' ? 'exitRoutingDirectList' : 'exitRoutingVpnList')}}</label>
+                <textarea id="exit-routing-networks" v-model="outboundRoutingNetworks" rows="5" spellcheck="false" placeholder="203.0.113.15&#10;198.51.100.0/24" aria-describedby="exit-routing-help" class="exit-input exit-code"></textarea>
+                <p id="exit-routing-help" class="exit-muted text-xs mt-2">{{$t('exitRoutingHelp')}}</p>
+                <p class="exit-note">{{$t('exitRoutingWarning')}}</p>
+                <div v-if="outboundError" role="alert" class="exit-feedback is-warning">{{outboundError}}</div>
+                <div class="exit-actions mt-4">
+                  <button type="submit" class="exit-button exit-button-primary">{{$t(outboundBusy ? 'exitSaving' : 'exitRoutingSave')}}</button>
+                  <button type="button" @click="outboundRoutingEditing = false; outboundError = ''" class="exit-button">{{$t('exitCancel')}}</button>
+                </div>
+              </fieldset>
+            </form>
+            <p v-if="outboundNotice === 'exitRoutingSaved'" role="status" class="exit-feedback">{{$t('exitRoutingSaved')}}</p>
           </div>
           <div v-if="!(outbound.mode === 'vpn' || outboundSetup) && outboundError" role="alert" class="exit-body"><p class="text-sm">{{$t('exitActionError')}}</p><p class="exit-muted text-xs mt-2">{{outboundError}}</p></div>
         </section>

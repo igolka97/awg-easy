@@ -25,6 +25,7 @@ const {
 
 const WireGuard = require('../services/WireGuard');
 const Outbound = require('../services/Outbound');
+const readOutboundBody = require('./OutboundBody');
 
 const {
   PORT,
@@ -230,7 +231,7 @@ module.exports = class Server {
       }))
       .post('/api/outbound', defineEventHandler(async (event) => {
         setHeader(event, 'Cache-Control', 'no-store');
-        const body = await readBody(event);
+        const body = await readOutboundBody(event.node.req);
         if (!body || typeof body !== 'object') throw createError({ statusCode: 400, message: 'Expected an object.' });
         const config = await WireGuard.getConfig();
         return Outbound.change(body.action, body, config.server.address);

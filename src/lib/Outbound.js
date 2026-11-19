@@ -5,14 +5,16 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const parseOutbound = require('./OutboundConfig');
+const parseRouting = require('./OutboundRouting');
 const ServerError = require('./ServerError');
 
 const execute = promisify(execFile);
 
 module.exports = class Outbound {
 
-  constructor({ directory, run } = {}) {
+  constructor({ directory, run, device = 'eth0' } = {}) {
     this.directory = directory;
+    this.device = device;
     this.run = run || (async (command, args) => {
       if (process.platform !== 'linux') throw new ServerError('VPN exits require Linux.', 503);
       try {
@@ -23,15 +25,18 @@ module.exports = class Outbound {
         throw new ServerError(`${command} failed. Check VPN configuration and container network permissions.`, 503);
       }
     });
-    this.state = { mode: 'direct', profile: null };
+    this.state = { mode: 'direct', profile: null, routing: { defaultExit: 'vpn', networks: [] } };
     this.error = null;
     this.busy = false;
+    this.routingReady = false;
   }
 
   async prepare() {
     try {
       this.state = JSON.parse(await fs.readFile(path.join(this.directory, 'outbound.json'), 'utf8'));
       if (!['direct', 'vpn'].includes(this.state.mode) || (this.state.mode === 'vpn' && !this.state.profile)) throw new Error('Invalid outbound state');
+      if (!this.state.routing) throw new Error('Missing IP routing settings. Run the explicit offline routing migration before upgrading.');
+      this.state.routing = parseRouting(this.state.routing);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
@@ -48,7 +53,7 @@ module.exports = class Outbound {
 
   async guard(enabled) {
     for (const [binary, rule] of [
-      ['iptables', ['-i', 'wg0', '!', '-o', 'awgout', '-m', 'comment', '--comment', 'awg-easy-outbound', '-j', 'REJECT']],
+      ['iptables', ['-i', 'wg0', '-m', 'comment', '--comment', 'awg-easy-outbound', '-j', 'REJECT']],
       ['ip6tables', ['-i', 'wg0', '-m', 'comment', '--comment', 'awg-easy-outbound', '-j', 'REJECT']],
     ]) {
       let exists = true;
@@ -84,16 +89,88 @@ module.exports = class Outbound {
     if (!exists) await this.run('iptables', ['-w', '5', '-t', 'nat', '-A', 'POSTROUTING', ...nat]);
   }
 
-  async restore() {
-    if (this.state.mode !== 'vpn') return;
+  async stageRouting(routing) {
+    // Load only the inactive set; a partial restore never alters live traffic.
+    const options = ['hash:net', 'family', 'inet', 'maxelem', '262144'];
+    await this.run('ipset', ['create', 'awg-exit-networks', ...options, '-exist']);
+    await this.run('ipset', ['create', 'awg-exit-staging', ...options, '-exist']);
+    const networks = routing.networks.flatMap((network) => (network === '0.0.0.0/0' ? ['0.0.0.0/1', '128.0.0.0/1'] : [network]));
+    await fs.mkdir(this.directory, { recursive: true });
+    const file = path.join(this.directory, 'routing.ipset');
     try {
-      await this.tunnel();
-      const rules = await this.run('ip', ['rule', 'show']);
-      if (!rules.includes('iif wg0 lookup 51830')) await this.run('ip', ['rule', 'add', 'priority', '10000', 'iif', 'wg0', 'lookup', '51830']);
-      this.error = null;
+      await fs.writeFile(file, `flush awg-exit-staging\n${networks.map((network) => `add awg-exit-staging ${network}`).join('\n')}\n`, { mode: 0o600 });
+      await this.run('ipset', ['-exist', 'restore', '-file', file]);
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  }
+
+  async applyRouting() {
+    this.routingReady = false;
+    // Only enabling/disabling or changing the default exit requires a brief guard.
+    await this.guard(true);
+    for (const [table, chain, parent] of [['filter', 'AWG-EXIT', 'FORWARD'], ['mangle', 'AWG-CLASSIFY', 'PREROUTING']]) {
+      let exists = true;
+      try {
+        await this.run('iptables', ['-w', '5', '-t', table, '-S', chain]);
+      } catch {
+        exists = false;
+      }
+      if (!exists) await this.run('iptables', ['-w', '5', '-t', table, '-N', chain]);
+      await this.run('iptables', ['-w', '5', '-t', table, '-F', chain]);
+      const jump = ['-i', 'wg0', '-j', chain];
+      let attached = true;
+      try {
+        await this.run('iptables', ['-w', '5', '-t', table, '-C', parent, ...jump]);
+      } catch {
+        attached = false;
+      }
+      if (this.state.mode === 'vpn' && !attached) await this.run('iptables', ['-w', '5', '-t', table, '-I', parent, table === 'filter' ? '2' : '1', ...jump]);
+      if (this.state.mode === 'direct' && attached) await this.run('iptables', ['-w', '5', '-t', table, '-D', parent, ...jump]);
+    }
+    const rules = JSON.parse(await this.run('ip', ['-j', 'rule', 'show']));
+    for (const rule of rules.filter((entry) => entry.priority === 10000)) {
+      await this.run('ip', ['rule', 'del', 'priority', String(rule.priority)]);
+    }
+    if (this.state.mode === 'vpn') {
+      await this.run('ip', ['route', 'replace', 'unreachable', 'default', 'metric', '32760', 'table', '51830']);
+      await this.run('ipset', ['swap', 'awg-exit-staging', 'awg-exit-networks']);
+      const vpnDefault = this.state.routing.defaultExit === 'vpn';
+      // Reserve one mark bit, recomputed per packet; other mark bits are preserved.
+      await this.run('iptables', ['-w', '5', '-t', 'mangle', '-A', 'AWG-CLASSIFY', '-j', 'MARK', '--set-xmark', `${vpnDefault ? '0x1000000' : '0x0'}/0x1000000`]);
+      await this.run('iptables', ['-w', '5', '-t', 'mangle', '-A', 'AWG-CLASSIFY', '-m', 'set', '--match-set', 'awg-exit-networks', 'dst', '-j', 'MARK', '--set-xmark', `${vpnDefault ? '0x0' : '0x1000000'}/0x1000000`]);
+      await this.run('iptables', ['-w', '5', '-A', 'AWG-EXIT', '-m', 'mark', '--mark', '0x1000000/0x1000000', '-o', 'awgout', '-j', 'RETURN']);
+      await this.run('iptables', ['-w', '5', '-A', 'AWG-EXIT', '-m', 'mark', '--mark', '0x0/0x1000000', '-o', this.device, '-j', 'RETURN']);
+      await this.run('iptables', ['-w', '5', '-A', 'AWG-EXIT', '-j', 'REJECT']);
+      await this.run('ip', ['rule', 'add', 'priority', '10000', 'iif', 'wg0', 'fwmark', '0x1000000/0x1000000', 'lookup', '51830']);
+      // Both routing and forwarding use the packet's mark, not a second set lookup.
+      await this.run('iptables', ['-w', '5', '-D', 'FORWARD', '-i', 'wg0', '-m', 'comment', '--comment', 'awg-easy-outbound', '-j', 'REJECT']);
+      this.routingReady = true;
+    } else {
+      await this.guard(false);
+    }
+  }
+
+  async restore(staged = false) {
+    if (this.state.mode !== 'vpn') return;
+    this.error = null;
+    try {
+      if (!staged) await this.stageRouting(this.state.routing);
+      await this.guard(true);
     } catch (err) {
       this.error = err.message;
-      // Keep the guard and the selected mode. Never fall back to direct access.
+      return;
+    }
+    try {
+      await this.tunnel();
+    } catch (err) {
+      this.error = err.message;
+    }
+    // Direct destinations must remain usable even when tunnel startup failed.
+    try {
+      await this.applyRouting();
+    } catch (err) {
+      this.error = err.message;
     }
   }
 
@@ -108,6 +185,7 @@ module.exports = class Outbound {
     }
     return {
       mode: this.state.mode,
+      routing: { ...this.state.routing, networks: [...this.state.routing.networks] },
       profile: this.state.profile ? { name: this.state.profile.name, endpoint: this.state.profile.endpoint } : null,
       handshake,
       connected: handshake !== null && (Date.now() / 1000) - handshake < 180,
@@ -127,6 +205,24 @@ module.exports = class Outbound {
         this.state.profile = profile;
         await this.persist();
         this.error = null;
+      } else if (action === 'routing') {
+        const routing = parseRouting(input.routing);
+        const previous = this.state.routing;
+        const swapOnly = this.state.mode === 'vpn' && this.routingReady && previous.defaultExit === routing.defaultExit;
+        if (this.state.mode === 'vpn') await this.stageRouting(routing);
+        this.state.routing = routing;
+        try {
+          await this.persist();
+          if (swapOnly) await this.run('ipset', ['swap', 'awg-exit-staging', 'awg-exit-networks']);
+        } catch (err) {
+          this.state.routing = previous;
+          await this.persist();
+          throw err;
+        }
+        if (this.state.mode === 'vpn' && !swapOnly) {
+          await this.restore(true);
+          if (this.error) throw new ServerError(this.error, 503);
+        }
       } else if (action === 'mode') {
         if (!['direct', 'vpn'].includes(input.mode)) throw new ServerError('Invalid exit mode.', 400);
         if (input.mode === 'vpn') {
@@ -137,8 +233,7 @@ module.exports = class Outbound {
           await this.restore();
           if (this.error) throw new ServerError(this.error, 503);
         } else {
-          const rules = await this.run('ip', ['rule', 'show']);
-          if (rules.includes('iif wg0 lookup 51830')) await this.run('ip', ['rule', 'del', 'priority', '10000', 'iif', 'wg0', 'lookup', '51830']);
+          await this.guard(true);
           this.state.mode = 'direct';
           try {
             await this.persist();
@@ -146,7 +241,7 @@ module.exports = class Outbound {
             this.state.mode = 'vpn';
             throw err;
           }
-          await this.guard(false);
+          await this.applyRouting();
           this.error = null;
         }
       } else if (action === 'check') {
