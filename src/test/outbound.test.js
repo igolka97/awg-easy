@@ -240,3 +240,83 @@ test('failed atomic swap restores saved state and leaves the old live set intact
   assert.equal(await fs.readFile(path.join(directory, 'outbound.json'), 'utf8'), before);
   assert.deepEqual(exit.state.routing.networks, []);
 });
+
+for (const mode of ['direct', 'vpn']) {
+  test(`blocking persists, restores and clears independently of ${mode} exit`, async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'awg-block-test-'));
+    t.after(() => fs.rm(directory, { recursive: true, force: true }));
+    const calls = [];
+    const loads = [];
+    const run = async (cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === 'ipset' && args.includes('restore')) loads.push(await fs.readFile(args.at(-1), 'utf8'));
+      if (args.includes('-C')) throw new Error('Rule absent');
+      if (cmd === 'ip' && args[0] === '-j') return '[]';
+      return '';
+    };
+    const exit = new Outbound({ directory, run });
+    exit.state.mode = mode;
+    exit.state.profile = mode === 'vpn' ? { name: 'Test', config } : null;
+    const status = await exit.change('blocking', { blockedNetworks: ['198.51.100.9/24', '198.51.100.0/24', '203.0.113.15', '0.0.0.0/0'] });
+    assert.deepEqual(status.blockedNetworks, ['198.51.100.0/24', '203.0.113.15/32', '0.0.0.0/0']);
+    assert.match(loads[0], /add awg-block-staging 0\.0\.0\.0\/1\nadd awg-block-staging 128\.0\.0\.0\/1/);
+    assert.ok(calls.some(([cmd, args]) => cmd === 'iptables' && args.join(' ') === '-w 5 -t mangle -I PREROUTING 1 -i wg0 -m set --match-set awg-block-networks dst -j DROP'));
+    assert.ok(calls.every(([cmd, args]) => cmd !== 'ip' && !args.includes('AWG-CLASSIFY')));
+    status.blockedNetworks.length = 0;
+    assert.equal(exit.state.blockedNetworks.length, 3);
+    const restored = new Outbound({ directory, run });
+    await restored.prepare();
+    assert.deepEqual(restored.state.blockedNetworks, exit.state.blockedNetworks);
+    assert.equal(loads.length, 2);
+    calls.length = 0;
+    await restored.change('mode', { mode: 'direct' });
+    assert.ok(!calls.some(([, args]) => args.includes('awg-block-networks')));
+    await restored.change('blocking', { blockedNetworks: [] });
+    assert.equal(loads.at(-1), 'flush awg-block-staging\n\n');
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, 'outbound.json'))).blockedNetworks, []);
+  });
+}
+
+for (const failure of ['restore', 'swap', '-I']) {
+  test(`failed blocking ${failure} preserves previous configuration`, async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'awg-block-test-'));
+    t.after(() => fs.rm(directory, { recursive: true, force: true }));
+    const calls = [];
+    const exit = new Outbound({
+      directory,
+      run: async (cmd, args) => {
+        calls.push(args);
+        if (args.includes('-C') || args.includes(failure)) throw new Error('Network failure');
+        return '';
+      },
+    });
+    exit.state.blockedNetworks = ['192.0.2.0/24'];
+    await exit.persist();
+    const before = await fs.readFile(path.join(directory, 'outbound.json'), 'utf8');
+    await assert.rejects(exit.change('blocking', { blockedNetworks: ['203.0.113.1'] }), /Network failure/);
+    assert.equal(await fs.readFile(path.join(directory, 'outbound.json'), 'utf8'), before);
+    assert.deepEqual(exit.state.blockedNetworks, ['192.0.2.0/24']);
+    if (failure !== 'swap') assert.ok(!calls.some((args) => args.includes('swap')));
+  });
+}
+
+test('blocking validates the complete list before touching networking', async () => {
+  const exit = new Outbound({ run: async () => assert.fail('Invalid input must not touch networking') });
+  for (const blockedNetworks of [undefined, null, '1.1.1.1', ['example.com'], ['::1'], ['1.1.1.1/33'], [null], Array(100000).fill('192.0.2.1/32')]) {
+    await assert.rejects(exit.change('blocking', { blockedNetworks }));
+    assert.deepEqual(exit.state.blockedNetworks, []);
+  }
+});
+
+test('old configurations default to no blocks, but explicit invalid lists fail startup', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'awg-block-test-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const state = { mode: 'direct', profile: null, routing: { defaultExit: 'vpn', networks: [] } };
+  const file = path.join(directory, 'outbound.json');
+  await fs.writeFile(file, JSON.stringify(state));
+  const exit = new Outbound({ directory, run: async () => assert.fail('No networking needed') });
+  await exit.prepare();
+  assert.deepEqual((await exit.status()).blockedNetworks, []);
+  await fs.writeFile(file, JSON.stringify({ ...state, blockedNetworks: null }));
+  await assert.rejects(exit.prepare(), /array of IPv4/);
+});

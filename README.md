@@ -273,6 +273,27 @@ to destinations whose exit changed may need to reconnect because their NAT mappi
 has changed. A failed tunnel startup still installs direct routes and keeps VPN
 routes unreachable. No automatic fallback to the direct exit is performed.
 
+### Block destinations by IPv4 address
+
+**Blocked IP addresses and subnets** is an independent list available without a
+second VPN profile. Enter one IPv4 address or CIDR per line, up to 1 MiB before
+and after normalization. Duplicates are removed; an empty list disables blocking.
+The list is saved as `blockedNetworks` in `outbound.json`. Existing configurations
+without this field load with an empty list; an explicitly invalid value is rejected.
+
+Blocking applies to every IPv4 packet entering `wg0`, before forwarding or local
+delivery, regardless of the selected exit or whether the second VPN is enabled.
+It takes priority over routing exceptions and also affects established connections.
+Blocking this server's VPN address prevents clients from accessing its services,
+including the admin panel. `0.0.0.0/0` blocks all incoming client IPv4 traffic.
+Domains and IPv6 entries are not supported. Host and other-container traffic is
+unaffected. Disabling or deleting the second VPN does not clear this list.
+
+The reserved ipsets `awg-block-networks` and `awg-block-staging` are loaded and
+swapped independently of routing. A mangle PREROUTING rule drops destinations in
+the active set. A failed load or swap preserves the previous block list. Saved
+blocks are restored before `wg0` is initialized; failure stops application startup.
+
 ### Explicit upgrade of existing exit configurations
 
 There is **no automatic migration** of an existing `outbound.json`. It now requires:

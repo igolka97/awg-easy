@@ -6,6 +6,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const parseOutbound = require('./OutboundConfig');
 const parseRouting = require('./OutboundRouting');
+const parseNetworks = require('./IPv4Networks');
 const ServerError = require('./ServerError');
 
 const execute = promisify(execFile);
@@ -25,7 +26,9 @@ module.exports = class Outbound {
         throw new ServerError(`${command} failed. Check VPN configuration and container network permissions.`, 503);
       }
     });
-    this.state = { mode: 'direct', profile: null, routing: { defaultExit: 'vpn', networks: [] } };
+    this.state = {
+      mode: 'direct', profile: null, blockedNetworks: [], routing: { defaultExit: 'vpn', networks: [] },
+    };
     this.error = null;
     this.busy = false;
     this.routingReady = false;
@@ -37,11 +40,16 @@ module.exports = class Outbound {
       if (!['direct', 'vpn'].includes(this.state.mode) || (this.state.mode === 'vpn' && !this.state.profile)) throw new Error('Invalid outbound state');
       if (!this.state.routing) throw new Error('Missing IP routing settings. Run the explicit offline routing migration before upgrading.');
       this.state.routing = parseRouting(this.state.routing);
+      this.state.blockedNetworks = Object.hasOwn(this.state, 'blockedNetworks') ? parseNetworks(this.state.blockedNetworks) : [];
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
     // Install the guard before the receiving interface becomes available on startup.
     if (this.state.mode === 'vpn') await this.guard(true);
+    if (this.state.blockedNetworks.length) {
+      await this.stageBlocking(this.state.blockedNetworks);
+      await this.run('ipset', ['swap', 'awg-block-staging', 'awg-block-networks']);
+    }
   }
 
   async persist() {
@@ -89,20 +97,33 @@ module.exports = class Outbound {
     if (!exists) await this.run('iptables', ['-w', '5', '-t', 'nat', '-A', 'POSTROUTING', ...nat]);
   }
 
-  async stageRouting(routing) {
+  async stageNetworks(entries, name) {
     // Load only the inactive set; a partial restore never alters live traffic.
     const options = ['hash:net', 'family', 'inet', 'maxelem', '262144'];
-    await this.run('ipset', ['create', 'awg-exit-networks', ...options, '-exist']);
-    await this.run('ipset', ['create', 'awg-exit-staging', ...options, '-exist']);
-    const networks = routing.networks.flatMap((network) => (network === '0.0.0.0/0' ? ['0.0.0.0/1', '128.0.0.0/1'] : [network]));
+    await this.run('ipset', ['create', `${name}-networks`, ...options, '-exist']);
+    await this.run('ipset', ['create', `${name}-staging`, ...options, '-exist']);
+    const networks = entries.flatMap((network) => (network === '0.0.0.0/0' ? ['0.0.0.0/1', '128.0.0.0/1'] : [network]));
     await fs.mkdir(this.directory, { recursive: true });
-    const file = path.join(this.directory, 'routing.ipset');
+    const file = path.join(this.directory, `${name}.ipset`);
     try {
-      await fs.writeFile(file, `flush awg-exit-staging\n${networks.map((network) => `add awg-exit-staging ${network}`).join('\n')}\n`, { mode: 0o600 });
+      await fs.writeFile(file, `flush ${name}-staging\n${networks.map((network) => `add ${name}-staging ${network}`).join('\n')}\n`, { mode: 0o600 });
       await this.run('ipset', ['-exist', 'restore', '-file', file]);
     } finally {
       await fs.rm(file, { force: true });
     }
+  }
+
+  async stageBlocking(networks) {
+    await this.stageNetworks(networks, 'awg-block');
+    // PREROUTING also covers local destinations and established connections.
+    const rule = ['-i', 'wg0', '-m', 'set', '--match-set', 'awg-block-networks', 'dst', '-j', 'DROP'];
+    let exists = true;
+    try {
+      await this.run('iptables', ['-w', '5', '-t', 'mangle', '-C', 'PREROUTING', ...rule]);
+    } catch {
+      exists = false;
+    }
+    if (!exists) await this.run('iptables', ['-w', '5', '-t', 'mangle', '-I', 'PREROUTING', '1', ...rule]);
   }
 
   async applyRouting() {
@@ -155,7 +176,7 @@ module.exports = class Outbound {
     if (this.state.mode !== 'vpn') return;
     this.error = null;
     try {
-      if (!staged) await this.stageRouting(this.state.routing);
+      if (!staged) await this.stageNetworks(this.state.routing.networks, 'awg-exit');
       await this.guard(true);
     } catch (err) {
       this.error = err.message;
@@ -185,6 +206,7 @@ module.exports = class Outbound {
     }
     return {
       mode: this.state.mode,
+      blockedNetworks: [...this.state.blockedNetworks],
       routing: { ...this.state.routing, networks: [...this.state.routing.networks] },
       profile: this.state.profile ? { name: this.state.profile.name, endpoint: this.state.profile.endpoint } : null,
       handshake,
@@ -205,11 +227,24 @@ module.exports = class Outbound {
         this.state.profile = profile;
         await this.persist();
         this.error = null;
+      } else if (action === 'blocking') {
+        const networks = parseNetworks(input.blockedNetworks);
+        await this.stageBlocking(networks);
+        const previous = this.state.blockedNetworks;
+        this.state.blockedNetworks = networks;
+        try {
+          await this.persist();
+          await this.run('ipset', ['swap', 'awg-block-staging', 'awg-block-networks']);
+        } catch (err) {
+          this.state.blockedNetworks = previous;
+          await this.persist();
+          throw err;
+        }
       } else if (action === 'routing') {
         const routing = parseRouting(input.routing);
         const previous = this.state.routing;
         const swapOnly = this.state.mode === 'vpn' && this.routingReady && previous.defaultExit === routing.defaultExit;
-        if (this.state.mode === 'vpn') await this.stageRouting(routing);
+        if (this.state.mode === 'vpn') await this.stageNetworks(routing.networks, 'awg-exit');
         this.state.routing = routing;
         try {
           await this.persist();

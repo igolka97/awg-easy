@@ -466,7 +466,7 @@
             </div>
             <p v-if="outbound.profile && !outboundForm && !outboundDeleting" class="exit-muted text-xs mt-2">{{$t('exitHandshakeHint')}}</p>
             <p v-if="outboundProbe" role="status" class="exit-feedback" :class="{ 'is-warning': !outboundProbe.internet }">{{outboundProbe.internet ? $t('exitInternetOk', { ip: outboundProbe.exitIp }) : $t('exitInternetFailed')}}</p>
-            <p v-if="outboundNotice && outboundNotice !== 'exitRoutingSaved' && !outboundForm && !outboundDeleting" role="status" class="exit-feedback">{{$t(outboundNotice)}}</p>
+            <p v-if="outboundNotice && outboundNotice !== 'exitRoutingSaved' && outboundNotice !== 'exitBlockingSaved' && !outboundForm && !outboundDeleting" role="status" class="exit-feedback">{{$t(outboundNotice)}}</p>
 
             <div v-if="outbound.mode === 'direct' && !outboundForm && !outboundDeleting" class="exit-actions mt-4">
               <button :disabled="outboundBusy" @click="editOutbound" class="exit-button" :class="{ 'exit-button-primary': !outbound.profile }">{{outbound.profile ? $t('exitReplace') : $t('exitImport')}}</button>
@@ -506,7 +506,7 @@
               </div>
             </div>
             <p v-if="outboundBusy && outboundAction === 'mode'" role="status" class="exit-note">{{$t('exitSwitching')}}</p>
-            <div v-if="!outboundForm && !outboundRoutingEditing && (outboundError || outbound.error)" role="alert" class="exit-feedback is-warning">
+            <div v-if="!outboundForm && !outboundRoutingEditing && !outboundBlockingEditing && (outboundError || outbound.error)" role="alert" class="exit-feedback is-warning">
               <p>{{$t(outbound.error ? 'exitRuntimeError' : 'exitActionError')}}</p>
               <button v-if="outbound.profile" :disabled="outboundBusy" @click="changeOutbound('mode', 'vpn')" class="exit-button mt-3">{{$t('exitRetry')}}</button>
               <details class="exit-details"><summary>{{$t('exitErrorDetails')}}</summary><p>{{outboundError || outbound.error}}</p></details>
@@ -537,7 +537,27 @@
             </form>
             <p v-if="outboundNotice === 'exitRoutingSaved'" role="status" class="exit-feedback">{{$t('exitRoutingSaved')}}</p>
           </div>
-          <div v-if="!(outbound.mode === 'vpn' || outboundSetup) && outboundError" role="alert" class="exit-body"><p class="text-sm">{{$t('exitActionError')}}</p><p class="exit-muted text-xs mt-2">{{outboundError}}</p></div>
+          <div v-if="!(outbound.mode === 'vpn' || outboundSetup) && !outboundBlockingEditing && outboundError" role="alert" class="exit-body"><p class="text-sm">{{$t('exitActionError')}}</p><p class="exit-muted text-xs mt-2">{{outboundError}}</p></div>
+          <div class="exit-body exit-expanded-body">
+            <h3 class="font-semibold">{{$t('exitBlockingTitle')}}</h3>
+            <p class="exit-muted text-sm mt-2">{{$t('exitBlockingSummary', { count: outbound.blockedNetworks.length })}}</p>
+            <p class="exit-muted text-sm mt-2">{{$t('exitBlockingHelp')}}</p>
+            <button v-if="!outboundBlockingEditing" :disabled="outboundBusy" @click="outboundBlockedNetworks = outbound.blockedNetworks.join('\n'); outboundBlockingEditing = true; outboundNotice = ''; outboundError = ''" class="exit-button mt-3">{{$t('exitBlockingEdit')}}</button>
+            <form v-else @submit.prevent="changeOutbound('blocking')" class="mt-4">
+              <fieldset :disabled="outboundBusy">
+                <label for="exit-blocked-networks" class="exit-label">{{$t('exitBlockingTitle')}}</label>
+                <textarea id="exit-blocked-networks" v-model="outboundBlockedNetworks" rows="5" spellcheck="false" placeholder="203.0.113.15&#10;198.51.100.0/24" aria-describedby="exit-blocking-help" class="exit-input exit-code"></textarea>
+                <p id="exit-blocking-help" class="exit-muted text-xs mt-2">{{$t('exitBlockingFormat')}}</p>
+                <p class="exit-note">{{$t('exitBlockingWarning')}}</p>
+                <div v-if="outboundError" role="alert" class="exit-feedback is-warning">{{outboundError}}</div>
+                <div class="exit-actions mt-4">
+                  <button type="submit" class="exit-button exit-button-primary">{{$t(outboundBusy ? 'exitSaving' : 'exitRoutingSave')}}</button>
+                  <button type="button" @click="outboundBlockingEditing = false; outboundError = ''" class="exit-button">{{$t('exitCancel')}}</button>
+                </div>
+              </fieldset>
+            </form>
+            <p v-if="outboundNotice === 'exitBlockingSaved'" role="status" class="exit-feedback">{{$t('exitBlockingSaved')}}</p>
+          </div>
         </section>
 
         <!-- QR Code-->
