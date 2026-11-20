@@ -25,6 +25,7 @@ const {
 
 const WireGuard = require('../services/WireGuard');
 const Outbound = require('../services/Outbound');
+const Proxy = require('../services/Proxy');
 const readOutboundBody = require('./OutboundBody');
 
 const {
@@ -145,6 +146,7 @@ module.exports = class Server {
         return {
           requiresPassword,
           authenticated,
+          proxyEnabled: Boolean(Proxy.url),
         };
       }))
       .get('/cnf/:clientOneTimeLink', defineEventHandler(async (event) => {
@@ -206,18 +208,10 @@ module.exports = class Server {
           return next();
         }
 
-        if (req.url.startsWith('/api/') && req.headers['authorization']) {
-          if (isPasswordValid(req.headers['authorization'], PASSWORD_HASH)) {
-            return next();
-          }
-          return res.status(401).json({
-            error: 'Incorrect Password',
-          });
-        }
-
-        return res.status(401).json({
-          error: 'Not Logged In',
-        });
+        const { authorization } = req.headers;
+        if (isPasswordValid(authorization, PASSWORD_HASH)) return next();
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: authorization ? 'Incorrect Password' : 'Not Logged In' }));
       }),
     );
 
@@ -246,6 +240,10 @@ module.exports = class Server {
       }))
       .get('/api/wireguard/client', defineEventHandler(() => {
         return WireGuard.getClients();
+      }))
+      .get('/api/wireguard/client/:clientId/proxy', defineEventHandler((event) => {
+        setHeader(event, 'Cache-Control', 'no-store');
+        return Proxy.credentials(getRouterParam(event, 'clientId'));
       }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');

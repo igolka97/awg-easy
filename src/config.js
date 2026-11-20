@@ -10,6 +10,7 @@ module.exports.MAX_AGE = parseInt(process.env.MAX_AGE, 10) * 1000 * 60 || 0;
 module.exports.WG_PATH = process.env.WG_PATH || '/etc/amnezia/amneziawg';
 module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;
+module.exports.PROXY_URL = process.env.PROXY_URL;
 module.exports.WG_PORT = process.env.WG_PORT || '51820';
 module.exports.WG_CONFIG_PORT = process.env.WG_CONFIG_PORT || process.env.WG_PORT || '51820';
 module.exports.WG_MTU = process.env.WG_MTU || null;

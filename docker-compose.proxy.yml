@@ -1,0 +1,40 @@
+services:
+  awg-easy:
+    image: awg-easy:with-proxy
+    build: .
+    environment:
+      PROXY_URL: "https://${PROXY_HOST:?Set PROXY_HOST to the public proxy hostname}:${PROXY_PORT:-3128}"
+    ports:
+      - "${PROXY_PORT:-3128}:3128/tcp"
+    volumes:
+      - proxy-auth:/run/awg-proxy
+
+  squid:
+    build: ./proxy
+    network_mode: "service:awg-easy"
+    depends_on:
+      awg-easy:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - proxy-auth:/run/awg-proxy:ro
+      - type: bind
+        source: ${PROXY_TLS_CERT:?Set PROXY_TLS_CERT to the certificate chain path}
+        target: /etc/squid/proxy.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PROXY_TLS_KEY:?Set PROXY_TLS_KEY to the private key path}
+        target: /etc/squid/proxy.key
+        read_only: true
+        bind:
+          create_host_path: false
+
+volumes:
+  proxy-auth:

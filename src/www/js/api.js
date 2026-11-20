@@ -124,6 +124,13 @@ class API {
     })));
   }
 
+  async getProxyCredentials(clientId) {
+    return this.call({
+      method: 'get',
+      path: `/wireguard/client/${encodeURIComponent(clientId)}/proxy`,
+    });
+  }
+
   async createClient({ name, expiredDate }) {
     return this.call({
       method: 'post',

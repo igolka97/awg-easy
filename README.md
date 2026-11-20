@@ -294,6 +294,56 @@ swapped independently of routing. A mangle PREROUTING rule drops destinations in
 the active set. A failed load or swap preserves the previous block list. Saved
 blocks are restored before `wg0` is initialized; failure stops application startup.
 
+### HTTP proxy through the VPN exit
+
+The optional Squid service lets applications use the configured VPN exit without
+connecting to AmneziaWG themselves. It accepts HTTP proxy requests over TLS and
+supports HTTPS destinations through CONNECT. The proxy uses `awgout` for site
+connections and DNS. Direct-routing exceptions for AmneziaWG clients do not
+apply to the proxy. If the VPN exit is disabled or unavailable, proxy requests
+fail. The proxy supports IPv4 destinations on ports 80 and 443, with CONNECT
+allowed on port 443.
+
+On the Docker host, set `PASSWORD_HASH` for the web UI and add these settings
+to `.env`:
+
+```dotenv
+PROXY_HOST=proxy.example.com
+PROXY_PORT=3128
+PROXY_TLS_CERT=/absolute/path/to/fullchain.pem
+PROXY_TLS_KEY=/absolute/path/to/privkey.pem
+```
+
+Use a TLS certificate valid for `PROXY_HOST`. The mounted files must be readable
+by UID/GID 10500 inside Squid. For example, the private key can be owned by
+`root:10500` with mode `0640`. Point the hostname at the entry server and allow
+the selected TCP port through its firewall. Recreate the Squid service after
+replacing the certificate files.
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
+```
+
+Enable the VPN exit in the web UI. Use **Copy proxy settings** on an active
+profile to get an `https://username:password@host:port` URL. Use an application
+that supports TLS to the proxy. For example, paste the copied URL at the prompt:
+
+```sh
+read -rs PROXY_URL
+curl --proxy "$PROXY_URL" https://1.1.1.1/cdn-cgi/trace
+unset PROXY_URL
+```
+
+The returned `ip=` should match **Check connection** in the VPN exit settings.
+Disabling, expiring or deleting a profile revokes access for new requests
+after Squid's one-second authentication cache expires. Existing CONNECT tunnels
+can stay open until the client disconnects.
+
+Back up `proxy-secret` alongside the persistent AmneziaWG configuration to
+preserve proxy passwords across restores. The proxy reserves policy route
+priorities `10002` and `10003`, routing table `51831` and UID `10500`
+in the shared network namespace.
+
 ### Explicit upgrade of existing exit configurations
 
 There is **no automatic migration** of an existing `outbound.json`. It now requires:

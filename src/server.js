@@ -3,10 +3,12 @@
 const WireGuard = require('./services/WireGuard');
 
 const Outbound = require('./services/Outbound');
+const Proxy = require('./services/Proxy');
 
 Outbound.prepare()
   .then(() => WireGuard.getConfig())
   .then(() => Outbound.restore())
+  .then(() => Proxy.start())
   // Start HTTP only after restoring the selected exit and its firewall.
   // eslint-disable-next-line global-require
   .then(() => require('./services/Server'))

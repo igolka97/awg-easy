@@ -117,6 +117,8 @@ new Vue({
     enableSortClient: false,
     sortClient: true, // Sort clients by name, true = asc, false = desc
     enableExpireTime: false,
+    proxyEnabled: false,
+    proxyCopyNotice: '',
 
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
     uiTheme: localStorage.theme || 'auto',
@@ -405,6 +407,7 @@ new Vue({
           const session = await this.api.getSession();
           this.authenticated = session.authenticated;
           this.requiresPassword = session.requiresPassword;
+          this.proxyEnabled = session.proxyEnabled;
           return this.refresh();
         })
         .catch((err) => {
@@ -422,6 +425,7 @@ new Vue({
         .then(() => {
           this.authenticated = false;
           this.clients = null;
+          this.proxyCopyNotice = '';
         })
         .catch((err) => {
           alert(err.message || err.toString());
@@ -440,6 +444,29 @@ new Vue({
       this.api.deleteClient({ clientId: client.id })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
+    },
+    async copyProxySettings(client) {
+      this.proxyCopyNotice = '';
+      const settings = this.api.getProxyCredentials(client.id).then(({ url, username, password }) => {
+        const proxy = new URL(url);
+        proxy.username = username;
+        proxy.password = password;
+        return proxy.href.slice(0, -1);
+      });
+      // Keep clipboard writes within the click gesture, including on Safari.
+      try {
+        if (navigator.clipboard?.write && window.ClipboardItem) {
+          const text = settings.then((url) => new Blob([url], { type: 'text/plain' }));
+          await navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })]);
+          this.proxyCopyNotice = this.$t('proxyCopied');
+          return;
+        }
+      } catch { /* The browser may require manual copying. */ }
+      try {
+        window.prompt(this.$t('copyProxySettings'), await settings);
+      } catch (err) {
+        this.proxyCopyNotice = err.message;
+      }
     },
     showOneTimeLink(client) {
       this.api.showOneTimeLink({ clientId: client.id })
@@ -540,6 +567,7 @@ new Vue({
       .then((session) => {
         this.authenticated = session.authenticated;
         this.requiresPassword = session.requiresPassword;
+        this.proxyEnabled = session.proxyEnabled;
         this.refresh({
           updateCharts: this.updateCharts,
         }).catch((err) => {

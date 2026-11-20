@@ -13,9 +13,12 @@ const execute = promisify(execFile);
 
 module.exports = class Outbound {
 
-  constructor({ directory, run, device = 'eth0' } = {}) {
+  constructor({
+    directory, run, device = 'eth0', proxyEnabled = false,
+  } = {}) {
     this.directory = directory;
     this.device = device;
+    this.proxyEnabled = proxyEnabled;
     this.run = run || (async (command, args) => {
       if (process.platform !== 'linux') throw new ServerError('VPN exits require Linux.', 503);
       try {
@@ -44,6 +47,7 @@ module.exports = class Outbound {
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
+    if (this.proxyEnabled) await this.prepareProxyRouting();
     // Install the guard before the receiving interface becomes available on startup.
     if (this.state.mode === 'vpn') await this.guard(true);
     if (this.state.blockedNetworks.length) {
@@ -57,6 +61,40 @@ module.exports = class Outbound {
     const target = path.join(this.directory, 'outbound.json');
     await fs.writeFile(`${target}.tmp`, JSON.stringify(this.state), { mode: 0o600 });
     await fs.rename(`${target}.tmp`, target);
+  }
+
+  async prepareProxyRouting() {
+    const owner = ['-m', 'owner', '--uid-owner', '10500'];
+    const reply = ['-m', 'conntrack', '--ctdir', 'REPLY', '--ctstate', 'ESTABLISHED'];
+    // Insert the deny rules first. Only replies and the IPv4 tunnel are allowed above them.
+    for (const [binary, rule] of [
+      ['iptables', [...owner, '-j', 'REJECT']],
+      ['ip6tables', [...owner, '-j', 'REJECT']],
+      ['iptables', [...owner, '-o', 'awgout', '-j', 'ACCEPT']],
+      ['iptables', [...owner, ...reply, '-j', 'ACCEPT']],
+      ['ip6tables', [...owner, ...reply, '-j', 'ACCEPT']],
+    ]) {
+      try {
+        await this.run(binary, ['-w', '5', '-C', 'OUTPUT', ...rule]);
+      } catch {
+        await this.run(binary, ['-w', '5', '-I', 'OUTPUT', '1', ...rule]);
+      }
+    }
+    await this.run('ip', ['route', 'replace', 'unreachable', 'default', 'metric', '32760', 'table', '51831']);
+    await this.setProxyRoute(false);
+    const rules = await this.run('ip', ['rule', 'show']);
+    // The listener's replies need the normal route. OUTPUT rejects any direct connection attempts.
+    if (!rules.includes('uidrange 10500-10500 ipproto tcp sport 3128 lookup main')) {
+      await this.run('ip', ['rule', 'add', 'priority', '10002', 'uidrange', '10500-10500', 'ipproto', 'tcp', 'sport', '3128', 'lookup', 'main']);
+    }
+    if (!rules.includes('uidrange 10500-10500 lookup 51831')) {
+      await this.run('ip', ['rule', 'add', 'priority', '10003', 'uidrange', '10500-10500', 'lookup', '51831']);
+    }
+  }
+
+  async setProxyRoute(enabled) {
+    const route = enabled ? ['default', 'dev', 'awgout'] : ['unreachable', 'default'];
+    await this.run('ip', ['route', 'replace', ...route, 'metric', '10', 'table', '51831']);
   }
 
   async guard(enabled) {
@@ -95,6 +133,7 @@ module.exports = class Outbound {
       exists = false;
     }
     if (!exists) await this.run('iptables', ['-w', '5', '-t', 'nat', '-A', 'POSTROUTING', ...nat]);
+    if (this.proxyEnabled && this.state.mode === 'vpn') await this.setProxyRoute(true);
   }
 
   async stageNetworks(entries, name) {
@@ -269,11 +308,13 @@ module.exports = class Outbound {
           if (this.error) throw new ServerError(this.error, 503);
         } else {
           await this.guard(true);
+          if (this.proxyEnabled) await this.setProxyRoute(false);
           this.state.mode = 'direct';
           try {
             await this.persist();
           } catch (err) {
             this.state.mode = 'vpn';
+            if (this.proxyEnabled) await this.tunnel();
             throw err;
           }
           await this.applyRouting();
